@@ -1,0 +1,26 @@
+# Public entry point (compose profile "public").
+#  - DOMAIN=lorawan.devinci.fr  -> automatic Let's Encrypt certificate
+#    (needs the DNS record + inbound 80/443 from the DSI).
+#  - DOMAIN=localhost           -> Caddy's internal CA, for testing before the DSI answers.
+{$DOMAIN} {
+	encode gzip
+
+	# Grafana dashboards under /grafana (GF_SERVER_SERVE_FROM_SUB_PATH=true)
+	handle /grafana* {
+		reverse_proxy grafana:3000
+	}
+
+	# The REST API (chirpstack-rest-api, port 8090) is deliberately NOT exposed here;
+	# it stays on 127.0.0.1. Use an SSH tunnel, or the gRPC API below with an API key.
+
+	# ChirpStack web UI + gRPC-web / gRPC API
+	handle {
+		reverse_proxy chirpstack:8080
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
+}

@@ -1,0 +1,155 @@
+# lorawan.devinci.fr – sovereign LoRaWAN stack (WP1)
+#
+#   docker compose up -d                                   # core LoRaWAN stack
+#   docker compose --profile dashboards up -d              # + InfluxDB + Grafana
+#   docker compose --profile dashboards --profile public up -d   # + HTTPS reverse proxy
+#
+# Runs unchanged on a Raspberry Pi 4/5 (arm64) and on an x86 VM (e.g. Azure, WP2).
+# Copy .env.example to .env and fill in the secrets first.
+
+name: lorawan-devinci
+
+x-restart: &restart
+  restart: unless-stopped
+
+services:
+  # ---------------------------------------------------------------- core
+  chirpstack:
+    <<: *restart
+    image: chirpstack/chirpstack:4
+    command: -c /etc/chirpstack
+    volumes:
+      - ./configuration/chirpstack:/etc/chirpstack:ro
+    depends_on: [postgres, mosquitto, redis]
+    environment:
+      - MQTT_BROKER_HOST=mosquitto
+      - REDIS_HOST=redis
+      - POSTGRESQL_HOST=postgres
+      - POSTGRESQL_PASSWORD=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      - CHIRPSTACK_API_SECRET=${CHIRPSTACK_API_SECRET:?set CHIRPSTACK_API_SECRET in .env}
+    ports:
+      # Web UI + gRPC API. Once the "public" profile (Caddy/HTTPS) is in use,
+      # set CHIRPSTACK_UI_BIND=127.0.0.1 so the UI is only reachable through HTTPS.
+      - "${CHIRPSTACK_UI_BIND:-0.0.0.0}:8080:8080"
+
+  # Semtech UDP packet forwarder (Pi + SX1302 HAT, virtual gateway, most cheap gateways)
+  chirpstack-gateway-bridge:
+    <<: *restart
+    image: chirpstack/chirpstack-gateway-bridge:4
+    volumes:
+      - ./configuration/chirpstack-gateway-bridge:/etc/chirpstack-gateway-bridge:ro
+    depends_on: [mosquitto]
+    ports:
+      - "1700:1700/udp"
+
+  # LoRa Basics Station (Kerlink iFemtoCell/iStation, RAK, MultiTech…). Kept for when the
+  # school's Kerlinks become available; harmless if nothing connects to it.
+  chirpstack-gateway-bridge-basicstation:
+    <<: *restart
+    image: chirpstack/chirpstack-gateway-bridge:4
+    command: -c /etc/chirpstack-gateway-bridge/chirpstack-gateway-bridge-basicstation-eu868.toml
+    volumes:
+      - ./configuration/chirpstack-gateway-bridge:/etc/chirpstack-gateway-bridge:ro
+    depends_on: [mosquitto]
+    ports:
+      - "3001:3001"
+
+  # REST façade over the gRPC API (used by scripts/provision.py). Local only.
+  chirpstack-rest-api:
+    <<: *restart
+    image: chirpstack/chirpstack-rest-api:4
+    command: --server chirpstack:8080 --bind 0.0.0.0:8090 --insecure
+    depends_on: [chirpstack]
+    ports:
+      - "127.0.0.1:8090:8090"
+
+  postgres:
+    <<: *restart
+    image: postgres:14-alpine
+    volumes:
+      - ./configuration/postgresql/initdb:/docker-entrypoint-initdb.d:ro
+      - postgresqldata:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=chirpstack
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      - POSTGRES_DB=chirpstack
+
+  redis:
+    <<: *restart
+    image: redis:7-alpine
+    command: redis-server --save 300 1 --save 60 100 --appendonly no
+    volumes:
+      - redisdata:/data
+
+  mosquitto:
+    <<: *restart
+    image: eclipse-mosquitto:2
+    volumes:
+      - ./configuration/mosquitto/config/:/mosquitto/config/:ro
+      - mosquittodata:/mosquitto/data
+    ports:
+      # Host-local only: lets you run `mosquitto_sub -h 127.0.0.1 -t '#' -v` on the server.
+      - "127.0.0.1:1883:1883"
+
+  # ---------------------------------------------------------------- dashboards
+  influxdb:
+    <<: *restart
+    profiles: [dashboards]
+    image: influxdb:2.7
+    volumes:
+      - influxdbdata:/var/lib/influxdb2
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=admin
+      - DOCKER_INFLUXDB_INIT_PASSWORD=${INFLUXDB_ADMIN_PASSWORD:?set INFLUXDB_ADMIN_PASSWORD in .env}
+      - DOCKER_INFLUXDB_INIT_ORG=${INFLUXDB_ORG:-devinci}
+      - DOCKER_INFLUXDB_INIT_BUCKET=${INFLUXDB_BUCKET:-lorawan}
+      - DOCKER_INFLUXDB_INIT_RETENTION=${INFLUXDB_RETENTION:-52w}
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${INFLUXDB_TOKEN:?set INFLUXDB_TOKEN in .env}
+    ports:
+      - "127.0.0.1:8086:8086"
+
+  grafana:
+    <<: *restart
+    profiles: [dashboards]
+    image: grafana/grafana-oss:11.5.2
+    depends_on: [influxdb]
+    volumes:
+      - ./configuration/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./configuration/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafanadata:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=${PUBLIC_URL:-http://localhost:3000}/grafana/
+      - GF_SERVER_SERVE_FROM_SUB_PATH=true
+      - INFLUXDB_ORG=${INFLUXDB_ORG:-devinci}
+      - INFLUXDB_BUCKET=${INFLUXDB_BUCKET:-lorawan}
+      - INFLUXDB_TOKEN=${INFLUXDB_TOKEN}
+    ports:
+      - "${GRAFANA_BIND:-127.0.0.1}:3000:3000"
+
+  # ---------------------------------------------------------------- public HTTPS
+  caddy:
+    <<: *restart
+    profiles: [public]
+    image: caddy:2
+    depends_on: [chirpstack]
+    environment:
+      - DOMAIN=${DOMAIN:-localhost}
+    volumes:
+      - ./configuration/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+      - caddyconfig:/config
+    ports:
+      - "80:80"
+      - "443:443"
+
+volumes:
+  postgresqldata:
+  redisdata:
+  mosquittodata:
+  influxdbdata:
+  grafanadata:
+  caddydata:
+  caddyconfig:

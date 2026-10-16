@@ -1,0 +1,40 @@
+# ChirpStack v4 – lorawan.devinci.fr
+# Based on https://github.com/chirpstack/chirpstack-docker, trimmed to EU868 only.
+# $VARIABLES are substituted from the container environment (see docker-compose.yml / .env).
+# Full reference: https://www.chirpstack.io/docs/chirpstack/configuration.html
+
+[logging]
+  # trace, debug, info, warn, error
+  level="info"
+
+[postgresql]
+  dsn="postgres://chirpstack:$POSTGRESQL_PASSWORD@$POSTGRESQL_HOST/chirpstack?sslmode=disable"
+  max_open_connections=10
+  min_idle_connections=0
+
+[redis]
+  servers=["redis://$REDIS_HOST/"]
+  tls_enabled=false
+  cluster=false
+
+[network]
+  # NetID 000000 = "experimental / private network" (LoRa Alliance NetID type 0).
+  # Fine for a closed campus network. Only change it if DVHE ever obtains its own NetID
+  # (needed for roaming, not for this project).
+  net_id="000000"
+
+  # France => EU868 only (863-870 MHz, ETSI EN 300 220, 1 % duty cycle on most sub-bands).
+  enabled_regions=["eu868"]
+
+[api]
+  bind="0.0.0.0:8080"
+  # Signs login sessions and API keys. Generate with:  openssl rand -base64 32
+  # Changing it invalidates every login and API key.
+  secret="$CHIRPSTACK_API_SECRET"
+
+[integration]
+  enabled=["mqtt"]
+
+  [integration.mqtt]
+    server="tcp://$MQTT_BROKER_HOST:1883/"
+    json=true

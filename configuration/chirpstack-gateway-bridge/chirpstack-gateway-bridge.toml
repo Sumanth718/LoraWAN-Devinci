@@ -1,0 +1,21 @@
+# ChirpStack Gateway Bridge – Semtech UDP packet forwarder backend (UDP 1700).
+# This is what a Raspberry Pi + SX1302 HAT running the Semtech "lora_pkt_fwd",
+# and the scripts/virtual_gateway.py simulator, talk to.
+# Reference: https://www.chirpstack.io/docs/chirpstack-gateway-bridge/configuration.html
+
+[backend]
+type="semtech_udp"
+
+  [backend.semtech_udp]
+  udp_bind="0.0.0.0:1700"
+
+[integration.mqtt.auth.generic]
+servers=["tcp://mosquitto:1883"]
+username=""
+password=""
+
+[integration.mqtt]
+# The "eu868" prefix must match topic_prefix in configuration/chirpstack/region_eu868.toml
+event_topic_template="eu868/gateway/{{ .GatewayID }}/event/{{ .EventType }}"
+state_topic_template="eu868/gateway/{{ .GatewayID }}/state/{{ .StateType }}"
+command_topic_template="eu868/gateway/{{ .GatewayID }}/command/#"

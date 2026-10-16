@@ -1,0 +1,6 @@
+.env
+**/secrets.h
+**/arduino_secrets.h
+.virtual_gateway_state.json
+__pycache__/
+.pio/

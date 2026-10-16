@@ -1,0 +1,9 @@
+apiVersion: 1
+
+providers:
+  - name: lorawan
+    folder: LoRaWAN
+    type: file
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/dashboards
